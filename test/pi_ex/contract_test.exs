@@ -91,6 +91,85 @@ defmodule PiEx.ContractTest do
     assert PiEx.Delta.done?(delta)
   end
 
+  describe "start options, os_pid and stop" do
+    @describetag :tmp_dir
+
+    test "starts the child in the given cd with the given env", %{tmp_dir: tmp_dir} do
+      {:ok, pid} =
+        PiEx.Instance.start_link(
+          pi_path: @stub_pi,
+          cd: tmp_dir,
+          env: [{'PI_EX_STUB_REPORT', 'marker-1'}]
+        )
+
+      assert_receive {:pi_event, _, %PiEx.Event.Unknown{type: "stub_report", data: data}}, 5000
+      assert data["cwd"] == physical_path(tmp_dir)
+      assert data["env"] == "marker-1"
+
+      on_exit(fn ->
+        if Process.alive?(pid), do: GenServer.stop(pid, :normal)
+      end)
+    end
+
+    test "os_pid/1 returns a live OS PID while the instance runs", %{tmp_dir: tmp_dir} do
+      {:ok, pid} = PiEx.Instance.start_link(pi_path: @stub_pi, cd: tmp_dir)
+      os_pid = PiEx.os_pid(pid)
+
+      assert is_integer(os_pid) and os_pid > 0
+      assert os_process_alive?(os_pid)
+
+      on_exit(fn ->
+        if Process.alive?(pid), do: GenServer.stop(pid, :normal)
+      end)
+    end
+
+    test "stop/2 returns :ok once the OS process is gone", %{tmp_dir: tmp_dir} do
+      {:ok, pid} = PiEx.Instance.start_link(pi_path: @stub_pi, cd: tmp_dir)
+      os_pid = PiEx.os_pid(pid)
+
+      assert :ok = PiEx.stop(pid)
+      refute os_process_alive?(os_pid)
+      refute Process.alive?(pid)
+    end
+
+    test "stop/2 returns {:error, :still_running} when the child outlives the deadline", %{
+      tmp_dir: tmp_dir
+    } do
+      {:ok, pid} =
+        PiEx.Instance.start_link(
+          pi_path: @stub_pi,
+          cd: tmp_dir,
+          env: [{"PI_EX_STUB_LINGER", "30"}]
+        )
+
+      os_pid = PiEx.os_pid(pid)
+
+      assert {:error, :still_running} = PiEx.stop(pid, 200)
+      assert os_process_alive?(os_pid)
+
+      on_exit(fn ->
+        System.cmd("kill", [Integer.to_string(os_pid)], stderr_to_stdout: true)
+      end)
+    end
+
+    test "stop/2 on an already-stopped instance returns :ok", %{tmp_dir: tmp_dir} do
+      {:ok, pid} = PiEx.Instance.start_link(pi_path: @stub_pi, cd: tmp_dir)
+
+      assert :ok = PiEx.stop(pid)
+      assert :ok = PiEx.stop(pid)
+    end
+  end
+
+  defp physical_path(path) do
+    {cwd, 0} = System.cmd("pwd", ["-P"], cd: path)
+    String.trim(cwd)
+  end
+
+  defp os_process_alive?(os_pid) do
+    {_, status} = System.cmd("kill", ["-0", Integer.to_string(os_pid)], stderr_to_stdout: true)
+    status == 0
+  end
+
   defp collect_delta(delta) do
     receive do
       {:pi_event, _, %MessageUpdate{} = event} ->

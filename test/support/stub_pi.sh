@@ -2,6 +2,12 @@
 # Pi RPC contract test double.
 # Reads JSON commands from stdin, writes deterministic JSON events/responses to stdout.
 
+# Opt-in: report the physical working directory and PI_EX_STUB_REPORT, then continue.
+if [ -n "$PI_EX_STUB_REPORT" ]; then
+  jq -cn --arg cwd "$(pwd -P)" --arg env "$PI_EX_STUB_REPORT" \
+    '{"type":"stub_report","cwd":$cwd,"env":$env}'
+fi
+
 while IFS= read -r line; do
   command=$(echo "$line" | jq -r '.type // ""')
   id=$(echo "$line" | jq -r '.id // ""')
@@ -42,3 +48,8 @@ while IFS= read -r line; do
       ;;
   esac
 done
+
+# Opt-in: keep the process alive after stdin closes so stop/2 observes a live child.
+if [ -n "$PI_EX_STUB_LINGER" ]; then
+  exec sleep "$PI_EX_STUB_LINGER"
+fi

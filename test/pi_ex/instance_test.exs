@@ -43,6 +43,35 @@ defmodule PiEx.InstanceTest do
     end
   end
 
+  describe "start_link validation" do
+    test "missing executable returns {:error, {:executable_not_found, path}} and the caller survives" do
+      missing = "pi-ex-missing-#{System.unique_integer([:positive])}"
+
+      assert {:error, {:executable_not_found, ^missing}} =
+               PiEx.Instance.start_link(pi_path: missing)
+
+      assert Process.alive?(self())
+    end
+
+    test "missing cd directory returns {:error, {:invalid_cd, path}} and the caller survives" do
+      stub = Path.expand("../support/stub_pi.sh", __DIR__)
+      missing = Path.join(System.tmp_dir!(), "pi-ex-missing-#{System.unique_integer([:positive])}")
+
+      assert {:error, {:invalid_cd, ^missing}} =
+               PiEx.Instance.start_link(pi_path: stub, cd: missing)
+
+      assert Process.alive?(self())
+    end
+  end
+
+  describe "os_pid" do
+    test "a fake-port instance has no OS PID" do
+      ctx = start_instance()
+      assert is_nil(PiEx.Instance.os_pid(ctx.pid))
+      GenServer.stop(ctx.pid, :normal)
+    end
+  end
+
   describe "event dispatch" do
     test "dispatches events to owner process by default" do
       ctx = start_instance()

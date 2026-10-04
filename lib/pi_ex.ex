@@ -59,4 +59,59 @@ defmodule PiEx do
   @doc "Respond to a UI request from Pi (select, confirm, input, etc.)."
   @spec respond_ui(GenServer.server(), String.t(), map()) :: :ok
   defdelegate respond_ui(server, request_id, response), to: PiEx.Instance
+
+  @doc "Return the OS PID of the child process, or `nil` when it is unavailable."
+  @spec os_pid(GenServer.server()) :: pos_integer() | nil
+  defdelegate os_pid(server), to: PiEx.Instance
+
+  @doc """
+  Stop the child process and its instance.
+
+  Closes the port, polls the child's OS process every 50 ms until it is gone or
+  `timeout` ms pass, then stops the instance. Returns `{:error, :still_running}`
+  when the child outlives the deadline. Stopping an already-stopped instance
+  returns `:ok`.
+  """
+  @spec stop(GenServer.server(), pos_integer()) :: :ok | {:error, :still_running}
+  def stop(server, timeout \\ 5_000) do
+    os_pid = close_and_os_pid(server)
+
+    gone? = is_nil(os_pid) or os_process_gone?(os_pid, System.monotonic_time(:millisecond) + timeout)
+
+    stop_instance(server)
+    if gone?, do: :ok, else: {:error, :still_running}
+  end
+
+  defp close_and_os_pid(server) do
+    PiEx.Instance.close_port(server)
+  catch
+    # The instance is gone (e.g. it saw the child exit), so the child is gone too.
+    :exit, {:noproc, _} -> nil
+  end
+
+  defp stop_instance(server) do
+    GenServer.stop(server, :normal)
+  catch
+    :exit, {:noproc, _} -> :ok
+  end
+
+  defp os_process_gone?(os_pid, deadline) do
+    if os_process_alive?(os_pid) do
+      if System.monotonic_time(:millisecond) >= deadline do
+        false
+      else
+        Process.sleep(50)
+        os_process_gone?(os_pid, deadline)
+      end
+    else
+      true
+    end
+  end
+
+  defp os_process_alive?(os_pid) do
+    {_, exit_status} =
+      System.cmd("kill", ["-0", Integer.to_string(os_pid)], stderr_to_stdout: true)
+
+    exit_status == 0
+  end
 end

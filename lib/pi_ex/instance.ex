@@ -14,6 +14,12 @@ defmodule PiEx.Instance do
     * `:owner` - PID to receive events (default: caller of `start_link/1`)
     * `:broadcast` - `fn id, event -> ... end` called instead of sending to owner
     * `:ui_timeout` - ms before auto-cancelling a UI request (default: `30_000`)
+    * `:cd` - working directory the child process starts in (optional)
+    * `:env` - extra environment variables for the child process as `[{name, value}]` (optional)
+
+  `start_link/1` returns `{:error, {:executable_not_found, pi_path}}` when the
+  executable cannot be resolved and `{:error, {:invalid_cd, cd}}` when `:cd` is
+  not an existing directory, without raising or exiting the caller.
   """
   use GenServer
 
@@ -31,6 +37,7 @@ defmodule PiEx.Instance do
       :owner,
       :broadcast,
       :writer,
+      :os_pid,
       pending_calls: %{},
       pending_ui: %{},
       ui_timeout: 30_000,
@@ -45,34 +52,67 @@ defmodule PiEx.Instance do
   end
 
   def start_link(opts) do
-    # Pass :name through to init for id inference, and set owner to caller
-    opts = Keyword.put_new(opts, :owner, self())
-    {gen_opts, instance_opts} = Keyword.split(opts, [:name])
-    name = Keyword.get(gen_opts, :name)
-    instance_opts = if name, do: Keyword.put_new(instance_opts, :name, name), else: instance_opts
-    GenServer.start_link(__MODULE__, instance_opts, gen_opts)
+    case validate_start(opts) do
+      :ok ->
+        # Pass :name through to init for id inference, and set owner to caller
+        opts = Keyword.put_new(opts, :owner, self())
+        {gen_opts, instance_opts} = Keyword.split(opts, [:name])
+        name = Keyword.get(gen_opts, :name)
+
+        instance_opts =
+          if name, do: Keyword.put_new(instance_opts, :name, name), else: instance_opts
+
+        GenServer.start_link(__MODULE__, instance_opts, gen_opts)
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  # The fake-port test seam (:port) skips validation.
+  defp validate_start(opts) do
+    if Keyword.has_key?(opts, :port) do
+      :ok
+    else
+      pi_path = Keyword.get(opts, :pi_path, "pi")
+
+      if is_nil(System.find_executable(pi_path)) do
+        {:error, {:executable_not_found, pi_path}}
+      else
+        case Keyword.fetch(opts, :cd) do
+          {:ok, cd} -> if File.dir?(cd), do: :ok, else: {:error, {:invalid_cd, cd}}
+          :error -> :ok
+        end
+      end
+    end
   end
 
   @impl true
   def init(opts) do
     owner = Keyword.fetch!(opts, :owner)
 
-    {port, writer} =
+    {port, writer, os_pid} =
       case Keyword.fetch(opts, :port) do
         {:ok, port} ->
           writer = Keyword.get(opts, :writer, fn _port, _data -> :ok end)
-          {port, writer}
+          {port, writer, nil}
 
         :error ->
           pi_path = Keyword.get(opts, :pi_path, "pi")
-          args = Keyword.get(opts, :args, ["--mode", "rpc"])
 
           executable =
             System.find_executable(pi_path) ||
               raise ArgumentError, "could not find executable: #{inspect(pi_path)}"
 
-          port = Port.open({:spawn_executable, executable}, [:binary, {:line, 1_048_576}, {:args, args}, :exit_status])
-          {port, &Port.command/2}
+          port = Port.open({:spawn_executable, executable}, port_options(opts))
+
+          os_pid =
+            case Port.info(port, :os_pid) do
+              {:os_pid, os_pid} -> os_pid
+              _ -> nil
+            end
+
+          {port, &Port.command/2, os_pid}
       end
 
     id =
@@ -85,6 +125,7 @@ defmodule PiEx.Instance do
       id: id,
       owner: owner,
       writer: writer,
+      os_pid: os_pid,
       broadcast: Keyword.get(opts, :broadcast),
       ui_timeout: Keyword.get(opts, :ui_timeout, 30_000)
     }
@@ -144,6 +185,16 @@ defmodule PiEx.Instance do
     GenServer.cast(server, {:respond_ui, request_id, response})
   end
 
+  @doc false
+  def os_pid(server) do
+    GenServer.call(server, :os_pid)
+  end
+
+  @doc false
+  def close_port(server) do
+    GenServer.call(server, :close_port)
+  end
+
   # --- Callbacks ---
 
   @impl true
@@ -187,6 +238,20 @@ defmodule PiEx.Instance do
 
   def handle_call({:bash, command}, from, %State{} = state) do
     send_correlated(state, %PiEx.Command.Bash{shell_command: command}, from)
+  end
+
+  def handle_call(:os_pid, _from, %State{os_pid: os_pid} = state) do
+    {:reply, os_pid, state}
+  end
+
+  def handle_call(:close_port, _from, %State{port: port, os_pid: os_pid} = state) do
+    try do
+      Port.close(port)
+    rescue
+      ArgumentError -> :ok
+    end
+
+    {:reply, os_pid, state}
   end
 
   @impl true
@@ -299,6 +364,24 @@ defmodule PiEx.Instance do
       ArgumentError ->
         Logger.debug("PiEx.Instance: port closed, write dropped")
         :port_closed
+    end
+  end
+
+  defp port_options(opts) do
+    options = [:binary, {:line, 1_048_576}, {:args, Keyword.get(opts, :args, ["--mode", "rpc"])}, :exit_status]
+
+    options =
+      case Keyword.fetch(opts, :cd) do
+        {:ok, cd} -> [{:cd, cd} | options]
+        :error -> options
+      end
+
+    case Keyword.fetch(opts, :env) do
+      {:ok, env} ->
+        [{:env, for({name, value} <- env, do: {to_charlist(name), to_charlist(value)})} | options]
+
+      :error ->
+        options
     end
   end
 

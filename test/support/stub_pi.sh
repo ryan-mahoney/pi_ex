@@ -24,9 +24,10 @@ while IFS= read -r line; do
       echo '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"Hello from contract pi"}}'
       echo '{"type":"message_update","assistantMessageEvent":{"type":"text_end"}}'
       echo '{"type":"message_update","assistantMessageEvent":{"type":"done","reason":"stop"}}'
-      echo '{"type":"message_end"}'
+      echo '{"type":"message_end","message":{"role":"assistant","content":"Hello from contract pi","stopReason":"stop"}}'
       echo '{"type":"turn_end"}'
       echo '{"type":"agent_end","messages":[]}'
+      echo '{"type":"agent_settled"}'
       ;;
     get_state)
       echo "{\"type\":\"response\",\"command\":\"get_state\",\"success\":true,\"id\":\"$id\",\"data\":{\"isStreaming\":false}}"

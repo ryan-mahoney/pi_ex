@@ -9,11 +9,13 @@ defmodule PiEx.Event do
 
   A typical prompt cycle emits events in this order:
 
-      AgentStart -> TurnStart -> MessageStart -> MessageUpdate* -> MessageEnd -> TurnEnd -> AgentEnd
+      AgentStart -> TurnStart -> MessageStart -> MessageUpdate* -> MessageEnd -> TurnEnd -> AgentEnd -> AgentSettled
 
   Tool use adds `ToolExecutionStart`, `ToolExecutionUpdate`, and
   `ToolExecutionEnd` events within a turn. Multiple turns may occur when the
-  agent loops through tool calls.
+  agent loops through tool calls. `AgentEnd` closes one low-level agent run;
+  retries, compaction recovery, steering or follow-up work may still continue.
+  `AgentSettled` means Pi will not continue automatically for this session-level run.
 
   ## Streaming content
 

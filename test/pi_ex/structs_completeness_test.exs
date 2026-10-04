@@ -40,6 +40,7 @@ defmodule PiEx.StructsCompletenessTest do
   @all_events [
     PiEx.Event.AgentStart,
     PiEx.Event.AgentEnd,
+    PiEx.Event.AgentSettled,
     PiEx.Event.TurnStart,
     PiEx.Event.TurnEnd,
     PiEx.Event.MessageStart,

@@ -98,12 +98,17 @@ defmodule PiEx.Protocol do
     "error" => :error
   }
 
-  @doc "Decode a JSON line from Pi's stdout into a tagged tuple."
+  @doc """
+  Decode a JSON line from Pi's stdout into a tagged tuple.
+
+  Returns `{:error, :invalid_record}` when the line is valid JSON but not an
+  object with a string `type` field.
+  """
   @spec decode_line(String.t()) ::
           {:response, String.t() | nil, Response.t()}
           | {:event, struct()}
           | {:ui_request, Event.UIRequest.t()}
-          | {:error, term()}
+          | {:error, :invalid_record | term()}
   def decode_line(line) do
     case JSON.decode(line) do
       {:ok, data} -> decode_parsed(data)
@@ -132,7 +137,13 @@ defmodule PiEx.Protocol do
       message: data["message"],
       placeholder: data["placeholder"],
       prefill: data["prefill"],
-      timeout: data["timeout"]
+      timeout: data["timeout"],
+      raw: data,
+      widget_key: data["widgetKey"],
+      widget_lines: data["widgetLines"],
+      notify_type: data["notifyType"],
+      status_key: data["statusKey"],
+      status_text: data["statusText"]
     }
 
     {:ui_request, event}
@@ -144,8 +155,11 @@ defmodule PiEx.Protocol do
     {:event, %Event.AgentEnd{messages: data["messages"]}}
   end
 
-  defp decode_parsed(%{"type" => "message_start"}), do: {:event, %Event.MessageStart{}}
-  defp decode_parsed(%{"type" => "message_end"}), do: {:event, %Event.MessageEnd{}}
+  defp decode_parsed(%{"type" => "agent_settled"}), do: {:event, %Event.AgentSettled{}}
+
+  defp decode_parsed(%{"type" => "message_start"} = data), do: {:event, %Event.MessageStart{raw: data}}
+
+  defp decode_parsed(%{"type" => "message_end"} = data), do: {:event, %Event.MessageEnd{raw: data}}
   defp decode_parsed(%{"type" => "turn_start"}), do: {:event, %Event.TurnStart{}}
   defp decode_parsed(%{"type" => "turn_end"}), do: {:event, %Event.TurnEnd{}}
 
@@ -205,9 +219,11 @@ defmodule PiEx.Protocol do
     {:event, %Event.ExtensionError{message: data["message"], code: data["code"]}}
   end
 
-  defp decode_parsed(%{"type" => type} = data) do
+  defp decode_parsed(%{"type" => type} = data) when is_binary(type) do
     {:event, %Event.Unknown{type: type, data: data}}
   end
+
+  defp decode_parsed(_data), do: {:error, :invalid_record}
 
   defp to_message_type(str), do: Map.get(@message_types, str, :unknown)
 end

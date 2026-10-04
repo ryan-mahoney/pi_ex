@@ -13,7 +13,10 @@ defmodule PiEx.Instance do
     * `:id` - identifier included in event tuples (defaults to `:name` or the port ref)
     * `:owner` - PID to receive events (default: caller of `start_link/1`)
     * `:broadcast` - `fn id, event -> ... end` called instead of sending to owner
-    * `:ui_timeout` - ms before auto-cancelling a UI request (default: `30_000`)
+    * `:ui_timeout` - ms before auto-cancelling a dialog UI request (`select`,
+      `confirm`, `input`, `editor`); `:infinity` (the default) never cancels.
+      Fire-and-forget requests (`notify`, `setWidget`, `setStatus`, `setTitle`,
+      `set_editor_text`) are delivered to the owner and never tracked or answered.
     * `:cd` - working directory the child process starts in (optional)
     * `:env` - extra environment variables for the child process as `[{name, value}]` (optional)
 
@@ -24,9 +27,12 @@ defmodule PiEx.Instance do
   use GenServer
 
   alias PiEx.Command.RespondUI
+  alias PiEx.Event.UIRequest
   alias PiEx.Protocol
 
   require Logger
+
+  @dialog_methods [:select, :confirm, :input, :editor]
 
   defmodule State do
     @moduledoc false
@@ -40,7 +46,7 @@ defmodule PiEx.Instance do
       :os_pid,
       pending_calls: %{},
       pending_ui: %{},
-      ui_timeout: 30_000,
+      ui_timeout: :infinity,
       line_buffer: "",
       is_streaming: false
     ]
@@ -127,7 +133,7 @@ defmodule PiEx.Instance do
       writer: writer,
       os_pid: os_pid,
       broadcast: Keyword.get(opts, :broadcast),
-      ui_timeout: Keyword.get(opts, :ui_timeout, 30_000)
+      ui_timeout: Keyword.get(opts, :ui_timeout, :infinity)
     }
 
     {:ok, state}
@@ -275,7 +281,8 @@ defmodule PiEx.Instance do
         {:noreply, state}
 
       {timer, pending_ui} ->
-        Process.cancel_timer(timer)
+        if is_reference(timer), do: Process.cancel_timer(timer)
+
         cmd = %RespondUI{request_id: request_id, response: response}
         write_command(state, cmd)
         {:noreply, %{state | pending_ui: pending_ui}}
@@ -298,9 +305,7 @@ defmodule PiEx.Instance do
 
       {:ui_request, event} ->
         dispatch(state, event)
-        timer = Process.send_after(self(), {:ui_timeout, event.id}, state.ui_timeout)
-        state = put_in(state.pending_ui[event.id], timer)
-        {:noreply, state}
+        {:noreply, track_ui_request(event, state)}
 
       {:error, _reason} ->
         Logger.warning("PiEx.Instance failed to decode line: #{inspect(full_line)}")
@@ -376,6 +381,24 @@ defmodule PiEx.Instance do
   defp track_streaming(%PiEx.Event.AgentStart{}, state), do: %{state | is_streaming: true}
   defp track_streaming(%PiEx.Event.AgentEnd{}, state), do: %{state | is_streaming: false}
   defp track_streaming(_, state), do: state
+
+  # Only dialogs (select, confirm, input, editor) wait for a response.
+  # A dialog is tracked with `:none` when no integer timeout is configured,
+  # so respond_ui still recognizes it; fire-and-forget requests are never tracked.
+  defp track_ui_request(%UIRequest{method: method, id: id}, %State{} = state) when method in @dialog_methods do
+    timer =
+      case state.ui_timeout do
+        timeout when is_integer(timeout) ->
+          Process.send_after(self(), {:ui_timeout, id}, timeout)
+
+        _ ->
+          :none
+      end
+
+    %{state | pending_ui: Map.put(state.pending_ui, id, timer)}
+  end
+
+  defp track_ui_request(%UIRequest{}, state), do: state
 
   defp write_command(%State{} = state, cmd) do
     json = Protocol.encode(cmd)

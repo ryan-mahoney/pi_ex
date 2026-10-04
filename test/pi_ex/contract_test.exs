@@ -27,7 +27,23 @@ defmodule PiEx.ContractTest do
     assert_receive {:pi_event, _, %MessageUpdate{type: :text_delta, text: "Hello from contract pi"}},
                    5000
 
+    assert_receive {:pi_event, _,
+                    %PiEx.Event.MessageEnd{
+                      raw: %{
+                        "message" => %{
+                          "role" => "assistant",
+                          "content" => "Hello from contract pi",
+                          "stopReason" => "stop"
+                        }
+                      }
+                    }},
+                   5000
+
     assert_receive {:pi_event, _, %AgentEnd{}}, 5000
+
+    # Pi 1.0.2: agent_settled follows agent_end and means Pi will not continue
+    # automatically through retries, compaction recovery, or queued messages.
+    assert_receive {:pi_event, _, %PiEx.Event.AgentSettled{}}, 5000
   end
 
   test "query APIs return expected response envelopes", %{pid: pid} do

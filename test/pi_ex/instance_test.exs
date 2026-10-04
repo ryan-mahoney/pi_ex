@@ -330,7 +330,9 @@ defmodule PiEx.InstanceTest do
   # --- Task 10: Extension UI Protocol ---
 
   describe "extension UI protocol" do
-    test "dispatches UIRequest event and parks timer" do
+    @describetag :capture_log
+
+    test "dispatches UIRequest event and tracks the dialog without a timer by default" do
       ctx = start_instance()
 
       json =
@@ -341,12 +343,16 @@ defmodule PiEx.InstanceTest do
       assert_receive {:pi_event, _, %UIRequest{id: "ui-1", method: :select}}
 
       state = :sys.get_state(ctx.pid)
-      assert Map.has_key?(state.pending_ui, "ui-1")
+      assert state.ui_timeout == :infinity
+      assert state.pending_ui["ui-1"] == :none
+
+      # The default never arms a cancel timer, so nothing is written to Pi.
+      refute_receive {:port_write, _}, 100
 
       GenServer.stop(ctx.pid, :normal)
     end
 
-    test "respond_ui clears timer and writes to port" do
+    test "respond_ui writes the response with the request id and clears the entry" do
       ctx = start_instance()
 
       json =
@@ -357,7 +363,10 @@ defmodule PiEx.InstanceTest do
 
       PiEx.Instance.respond_ui(ctx.pid, "ui-1", %{value: "a"})
 
-      assert_receive {:port_write, _}
+      assert_receive {:port_write, data}
+
+      decoded = JSON.decode!(String.trim_trailing(data, "\n"))
+      assert decoded == %{"type" => "extension_ui_response", "id" => "ui-1", "value" => "a"}
 
       state = :sys.get_state(ctx.pid)
       refute Map.has_key?(state.pending_ui, "ui-1")
@@ -389,10 +398,59 @@ defmodule PiEx.InstanceTest do
       assert_receive {:pi_event, _, %UIRequest{}}
 
       # Wait for the auto-cancel response to be written to port
-      assert_receive {:port_write, _}, 500
+      assert_receive {:port_write, data}, 500
+
+      decoded = JSON.decode!(String.trim_trailing(data, "\n"))
+      assert decoded == %{"type" => "extension_ui_response", "id" => "ui-1", "cancelled" => true}
 
       state = :sys.get_state(ctx.pid)
       refute Map.has_key?(state.pending_ui, "ui-1")
+
+      GenServer.stop(ctx.pid, :normal)
+    end
+
+    test "fire-and-forget requests reach the owner, are never tracked, and are never answered" do
+      ctx = start_instance(ui_timeout: 50)
+
+      lines = [
+        ~s|{"type":"extension_ui_request","id":"f-1","method":"notify","message":"blocked","notifyType":"warning"}|,
+        ~s|{"type":"extension_ui_request","id":"f-2","method":"setWidget","widgetKey":"subagent-async","widgetLines":["PI_SUBAGENT_ASYNC_JSON:{\\\"runs\\\":[]}"]}|,
+        ~s|{"type":"extension_ui_request","id":"f-3","method":"setStatus","statusKey":"my-ext","statusText":"running"}|,
+        ~s|{"type":"extension_ui_request","id":"f-4","method":"setTitle","title":"pi"}|,
+        ~s|{"type":"extension_ui_request","id":"f-5","method":"set_editor_text","text":"draft"}|
+      ]
+
+      for line <- lines, do: send_line(ctx, line)
+
+      assert_receive {:pi_event, _, %UIRequest{id: "f-1", method: :notify}}
+      assert_receive {:pi_event, _, %UIRequest{id: "f-2", method: :set_widget}}
+      assert_receive {:pi_event, _, %UIRequest{id: "f-3", method: :set_status}}
+      assert_receive {:pi_event, _, %UIRequest{id: "f-4", method: :set_title}}
+      assert_receive {:pi_event, _, %UIRequest{id: "f-5", method: :set_editor_text}}
+
+      state = :sys.get_state(ctx.pid)
+      assert state.pending_ui == %{}
+
+      # Three times the configured timeout: tracking any fire-and-forget request
+      # with a timer would have written a cancel by now.
+      refute_receive {:port_write, _}, 150
+
+      assert Process.alive?(ctx.pid)
+      GenServer.stop(ctx.pid, :normal)
+    end
+
+    test "non-object JSON lines log a warning and the instance keeps delivering events" do
+      ctx = start_instance()
+
+      for line <- ["42", "null", "[]", ~s|"bare"|, ~s|{"foo":1}|, ~s|{"type":5}|] do
+        send_line(ctx, line)
+      end
+
+      refute_receive {:pi_event, _, _}, 50
+
+      send_line(ctx, ~s|{"type":"agent_start"}|)
+      assert_receive {:pi_event, _, %AgentStart{}}
+      assert Process.alive?(ctx.pid)
 
       GenServer.stop(ctx.pid, :normal)
     end

@@ -12,8 +12,12 @@ defmodule PiEx.Protocol.DecodeTest do
   end
 
   test "decodes message and turn boundary events" do
-    assert Protocol.decode_line(~s|{"type":"message_start"}|) == {:event, %Event.MessageStart{}}
-    assert Protocol.decode_line(~s|{"type":"message_end"}|) == {:event, %Event.MessageEnd{}}
+    assert Protocol.decode_line(~s|{"type":"message_start"}|) ==
+             {:event, %Event.MessageStart{raw: %{"type" => "message_start"}}}
+
+    assert Protocol.decode_line(~s|{"type":"message_end"}|) ==
+             {:event, %Event.MessageEnd{raw: %{"type" => "message_end"}}}
+
     assert Protocol.decode_line(~s|{"type":"turn_start"}|) == {:event, %Event.TurnStart{}}
     assert Protocol.decode_line(~s|{"type":"turn_end"}|) == {:event, %Event.TurnEnd{}}
   end
@@ -31,7 +35,14 @@ defmodule PiEx.Protocol.DecodeTest do
                 message: "Delete?",
                 placeholder: nil,
                 prefill: nil,
-                timeout: nil
+                timeout: nil,
+                raw: %{
+                  "type" => "extension_ui_request",
+                  "id" => "ui-confirm",
+                  "method" => "confirm",
+                  "title" => "Sure?",
+                  "message" => "Delete?"
+                }
               }}
   end
 

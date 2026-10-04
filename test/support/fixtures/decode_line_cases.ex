@@ -51,6 +51,41 @@ defmodule PiEx.TestFixtures.DecodeLineCases do
         expected: {:event, %Event.AgentEnd{messages: [%{"role" => "assistant"}]}}
       },
       %{
+        name: "agent settled event",
+        line: ~s|{"type":"agent_settled"}|,
+        expected: {:event, %Event.AgentSettled{}}
+      },
+      %{
+        name: "message start keeps the full payload",
+        line:
+          ~s|{"type":"message_start","message":{"role":"user","content":"Review this repository","timestamp":1733234401000}}|,
+        expected:
+          {:event,
+           %Event.MessageStart{
+             raw: %{
+               "type" => "message_start",
+               "message" => %{
+                 "role" => "user",
+                 "content" => "Review this repository",
+                 "timestamp" => 1_733_234_401_000
+               }
+             }
+           }}
+      },
+      %{
+        name: "message end keeps the full assistant payload",
+        line:
+          ~s|{"type":"message_end","message":{"role":"assistant","content":"Done","stopReason":"stop"}}|,
+        expected:
+          {:event,
+           %Event.MessageEnd{
+             raw: %{
+               "type" => "message_end",
+               "message" => %{"role" => "assistant", "content" => "Done", "stopReason" => "stop"}
+             }
+           }}
+      },
+      %{
         name: "message update text_delta uses delta key",
         line: ~s|{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"hello"}}|,
         expected: {:event, %Event.MessageUpdate{type: :text_delta, text: "hello", reason: nil}}
@@ -100,7 +135,49 @@ defmodule PiEx.TestFixtures.DecodeLineCases do
              message: nil,
              placeholder: nil,
              prefill: nil,
-             timeout: nil
+             timeout: nil,
+             raw: %{
+               "type" => "extension_ui_request",
+               "id" => "ui-1",
+               "method" => "select",
+               "title" => "Pick",
+               "options" => ["a", "b"]
+             }
+           }}
+      },
+      %{
+        name: "ui request setWidget keeps widget key and lines",
+        line:
+          ~s|{"type":"extension_ui_request","id":"w-1","method":"setWidget","widgetKey":"subagent-async","widgetLines":["--- Subagents ---","PI_SUBAGENT_ASYNC_JSON:{\\\"runs\\\":[{\\\"asyncId\\\":\\\"a1\\\",\\\"state\\\":\\\"running\\\"}]}"]}|,
+        expected:
+          {:ui_request,
+           %Event.UIRequest{
+             id: "w-1",
+             method: :set_widget,
+             title: nil,
+             options: nil,
+             message: nil,
+             placeholder: nil,
+             prefill: nil,
+             timeout: nil,
+             raw: %{
+               "type" => "extension_ui_request",
+               "id" => "w-1",
+               "method" => "setWidget",
+               "widgetKey" => "subagent-async",
+               "widgetLines" => [
+                 "--- Subagents ---",
+                 "PI_SUBAGENT_ASYNC_JSON:{\"runs\":[{\"asyncId\":\"a1\",\"state\":\"running\"}]}"
+               ]
+             },
+             widget_key: "subagent-async",
+             widget_lines: [
+               "--- Subagents ---",
+               "PI_SUBAGENT_ASYNC_JSON:{\"runs\":[{\"asyncId\":\"a1\",\"state\":\"running\"}]}"
+             ],
+             notify_type: nil,
+             status_key: nil,
+             status_text: nil
            }}
       },
       %{
@@ -116,8 +193,84 @@ defmodule PiEx.TestFixtures.DecodeLineCases do
              message: nil,
              placeholder: nil,
              prefill: nil,
-             timeout: nil
+             timeout: nil,
+             raw: %{
+               "type" => "extension_ui_request",
+               "id" => "ui-2",
+               "method" => "future_method",
+               "title" => "X"
+             }
            }}
+      },
+      %{
+        name: "ui request notify keeps notify type",
+        line:
+          ~s|{"type":"extension_ui_request","id":"n-1","method":"notify","message":"Command blocked by user","notifyType":"warning"}|,
+        expected:
+          {:ui_request,
+           %Event.UIRequest{
+             id: "n-1",
+             method: :notify,
+             message: "Command blocked by user",
+             notify_type: "warning",
+             raw: %{
+               "type" => "extension_ui_request",
+               "id" => "n-1",
+               "method" => "notify",
+               "message" => "Command blocked by user",
+               "notifyType" => "warning"
+             }
+           }}
+      },
+      %{
+        name: "ui request setStatus keeps status key and text",
+        line:
+          ~s|{"type":"extension_ui_request","id":"s-1","method":"setStatus","statusKey":"my-ext","statusText":"Turn 3 running..."}|,
+        expected:
+          {:ui_request,
+           %Event.UIRequest{
+             id: "s-1",
+             method: :set_status,
+             status_key: "my-ext",
+             status_text: "Turn 3 running...",
+             raw: %{
+               "type" => "extension_ui_request",
+               "id" => "s-1",
+               "method" => "setStatus",
+               "statusKey" => "my-ext",
+               "statusText" => "Turn 3 running..."
+             }
+           }}
+      },
+      %{
+        name: "invalid record integer",
+        line: "42",
+        expected: {:error, :invalid_record}
+      },
+      %{
+        name: "invalid record null",
+        line: "null",
+        expected: {:error, :invalid_record}
+      },
+      %{
+        name: "invalid record array",
+        line: "[]",
+        expected: {:error, :invalid_record}
+      },
+      %{
+        name: "invalid record bare string",
+        line: ~s|"a bare string"|,
+        expected: {:error, :invalid_record}
+      },
+      %{
+        name: "invalid record missing type",
+        line: ~s|{"foo":1}|,
+        expected: {:error, :invalid_record}
+      },
+      %{
+        name: "invalid record non-string type",
+        line: ~s|{"type":5}|,
+        expected: {:error, :invalid_record}
       },
       %{
         name: "auto compaction start event",

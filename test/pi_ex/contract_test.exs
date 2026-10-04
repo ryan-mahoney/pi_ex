@@ -106,7 +106,7 @@ defmodule PiEx.ContractTest do
         PiEx.Instance.start_link(
           pi_path: @stub_pi,
           cd: tmp_dir,
-          env: [{'PI_EX_STUB_REPORT', 'marker-1'}]
+          env: [{~c"PI_EX_STUB_REPORT", ~c"marker-1"}]
         )
 
       assert_receive {:pi_event, _, %PiEx.Event.Unknown{type: "stub_report", data: data}}, 5000

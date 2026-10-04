@@ -74,6 +74,28 @@ defmodule PiEx.InstanceTest do
     end
   end
 
+  describe "stop/2" do
+    test "returns :ok when the instance exits while the close call is in flight" do
+      ctx = start_instance()
+      :sys.suspend(ctx.pid)
+
+      task =
+        Task.async(fn ->
+          # One sender, so the instance handles the exit before the close call.
+          send(ctx.pid, {ctx.port, {:exit_status, 0}})
+          PiEx.stop(ctx.pid)
+        end)
+
+      # Both messages wait behind the suspension; resuming exits the instance
+      # with :normal before it can answer the close call.
+      Process.sleep(50)
+      :sys.resume(ctx.pid)
+
+      assert :ok = Task.await(task, 5_000)
+      refute Process.alive?(ctx.pid)
+    end
+  end
+
   describe "event dispatch" do
     test "dispatches events to owner process by default" do
       ctx = start_instance()

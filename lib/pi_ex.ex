@@ -99,14 +99,28 @@ defmodule PiEx do
   defp close_and_os_pid(server) do
     PiEx.Instance.close_port(server)
   catch
-    # The instance is gone (e.g. it saw the child exit), so the child is gone too.
-    :exit, {:noproc, _} -> nil
+    # The instance is gone or terminating (it saw the child exit, or another
+    # process is stopping it), so the child is gone too. An exit from a live
+    # instance (e.g. :timeout) is a genuine failure and propagates.
+    :exit, {_reason, {GenServer, :call, _}} = exit_reason ->
+      if instance_alive?(server), do: :erlang.raise(:exit, exit_reason, __STACKTRACE__)
   end
 
   defp stop_instance(server) do
     GenServer.stop(server, :normal)
   catch
-    :exit, {:noproc, _} -> :ok
+    :exit, {_reason, {GenServer, :stop, _}} = exit_reason ->
+      if instance_alive?(server), do: :erlang.raise(:exit, exit_reason, __STACKTRACE__), else: :ok
+  end
+
+  # `GenServer.whereis/1` returns a dead local PID unchanged, so check liveness.
+  defp instance_alive?(server) do
+    case GenServer.whereis(server) do
+      nil -> false
+      pid when is_pid(pid) and node(pid) == node() -> Process.alive?(pid)
+      # An unresolved or non-local spec is assumed alive so its exit propagates.
+      _ -> true
+    end
   end
 
   defp os_process_gone?(os_pid, deadline) do

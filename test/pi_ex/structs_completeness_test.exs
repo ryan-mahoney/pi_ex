@@ -32,6 +32,8 @@ defmodule PiEx.StructsCompletenessTest do
     PiEx.Command.SetSessionName,
     PiEx.Command.ExportHtml,
     PiEx.Command.GetCommands,
+    PiEx.Command.GetEntries,
+    PiEx.Command.ClearQueue,
     RespondUI
   ]
 

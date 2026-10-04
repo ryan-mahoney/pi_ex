@@ -24,15 +24,17 @@ defmodule PiEx.TestFixtures.CommandShapeMatrix do
         full: %Command.Prompt{
           id: "req-prompt",
           message: "describe",
-          images: [%{data: "base64", mime_type: "image/png"}]
+          images: [%{data: "base64", mime_type: "image/png"}],
+          streaming_behavior: "followUp"
         },
         expected_full: %{
           "type" => "prompt",
           "id" => "req-prompt",
           "message" => "describe",
-          "images" => [%{"data" => "base64", "mimeType" => "image/png"}]
+          "images" => [%{"data" => "base64", "mimeType" => "image/png"}],
+          "streamingBehavior" => "followUp"
         },
-        forbidden_keys: ["model_id", "mime_type", "request_id", "shell_command"]
+        forbidden_keys: ["model_id", "mime_type", "request_id", "shell_command", "streaming_behavior"]
       },
       %{
         name: "steer",
@@ -290,6 +292,24 @@ defmodule PiEx.TestFixtures.CommandShapeMatrix do
         expected_minimal: %{"type" => "get_commands"},
         full: %Command.GetCommands{id: "req-get-commands"},
         expected_full: %{"type" => "get_commands", "id" => "req-get-commands"},
+        forbidden_keys: ["request_id", "shell_command"]
+      },
+      %{
+        name: "get_entries",
+        module: Command.GetEntries,
+        minimal: %Command.GetEntries{since: "abc123"},
+        expected_minimal: %{"type" => "get_entries", "since" => "abc123"},
+        full: %Command.GetEntries{id: "req-entries", since: "abc123"},
+        expected_full: %{"type" => "get_entries", "id" => "req-entries", "since" => "abc123"},
+        forbidden_keys: ["request_id", "shell_command"]
+      },
+      %{
+        name: "clear_queue",
+        module: Command.ClearQueue,
+        minimal: %Command.ClearQueue{},
+        expected_minimal: %{"type" => "clear_queue"},
+        full: %Command.ClearQueue{id: "req-clear-queue"},
+        expected_full: %{"type" => "clear_queue", "id" => "req-clear-queue"},
         forbidden_keys: ["request_id", "shell_command"]
       },
       %{

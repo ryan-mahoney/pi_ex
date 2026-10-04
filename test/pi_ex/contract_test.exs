@@ -83,6 +83,13 @@ defmodule PiEx.ContractTest do
     end
   end
 
+  test "command/3 correlates the stub response by its generated id", %{pid: pid} do
+    assert {:ok, %Response{command: "get_entries", success: true, id: id}} =
+             PiEx.command(pid, %PiEx.Command.GetEntries{since: "abc"}, 5_000)
+
+    assert is_binary(id) and id != ""
+  end
+
   test "delta accumulation over full stream", %{pid: pid} do
     PiEx.prompt(pid, "hello")
 

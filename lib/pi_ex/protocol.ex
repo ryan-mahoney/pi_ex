@@ -113,6 +113,7 @@ defmodule PiEx.Protocol do
 
   defp decode_parsed(%{"type" => "response"} = data) do
     response = %Response{
+      id: data["id"],
       command: data["command"],
       success: data["success"],
       error: data["error"],

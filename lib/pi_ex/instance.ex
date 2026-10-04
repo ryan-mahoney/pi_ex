@@ -181,6 +181,11 @@ defmodule PiEx.Instance do
   end
 
   @doc false
+  def command(server, cmd, timeout) when is_integer(timeout) and timeout > 0 do
+    GenServer.call(server, {:command, cmd, timeout}, timeout + 1000)
+  end
+
+  @doc false
   def respond_ui(server, request_id, response) do
     GenServer.cast(server, {:respond_ui, request_id, response})
   end
@@ -238,6 +243,10 @@ defmodule PiEx.Instance do
 
   def handle_call({:bash, command}, from, %State{} = state) do
     send_correlated(state, %PiEx.Command.Bash{shell_command: command}, from)
+  end
+
+  def handle_call({:command, cmd, timeout}, from, %State{} = state) do
+    send_correlated(state, cmd, from, timeout)
   end
 
   def handle_call(:os_pid, _from, %State{os_pid: os_pid} = state) do
@@ -306,7 +315,7 @@ defmodule PiEx.Instance do
   def handle_info({port, {:exit_status, code}}, %State{port: port} = state) do
     dispatch(state, %PiEx.Event.Exited{code: code})
 
-    for {_id, from} <- state.pending_calls do
+    for {_id, {from, _timer}} <- state.pending_calls do
       GenServer.reply(from, {:error, {:pi_exited, code}})
     end
 
@@ -325,6 +334,17 @@ defmodule PiEx.Instance do
     end
   end
 
+  def handle_info({:command_timeout, id}, %State{} = state) do
+    case Map.pop(state.pending_calls, id) do
+      {nil, _} ->
+        {:noreply, state}
+
+      {{from, _timer}, pending_calls} ->
+        GenServer.reply(from, {:error, :timeout})
+        {:noreply, %{state | pending_calls: pending_calls}}
+    end
+  end
+
   def handle_info(msg, state) do
     Logger.warning("PiEx.Instance received unexpected message: #{inspect(msg)}")
     {:noreply, state}
@@ -336,7 +356,9 @@ defmodule PiEx.Instance do
         dispatch(state, response)
         {:noreply, state}
 
-      {from, pending_calls} ->
+      {{from, timer}, pending_calls} ->
+        cancel_deadline(timer)
+
         result = if response.success, do: {:ok, response}, else: {:error, response}
         GenServer.reply(from, result)
         {:noreply, %{state | pending_calls: pending_calls}}
@@ -385,12 +407,33 @@ defmodule PiEx.Instance do
     end
   end
 
-  defp send_correlated(%State{} = state, cmd, from) do
+  defp send_correlated(state, cmd, from, deadline \\ nil)
+
+  defp send_correlated(%State{} = state, cmd, from, nil) do
     id = generate_id()
     cmd = %{cmd | id: id}
     write_command(state, cmd)
-    {:noreply, put_in(state.pending_calls[id], from)}
+    {:noreply, put_in(state.pending_calls[id], {from, nil})}
   end
+
+  defp send_correlated(%State{} = state, cmd, from, timeout) do
+    id = generate_id()
+    cmd = %{cmd | id: id}
+
+    case write_command(state, cmd) do
+      :port_closed ->
+        GenServer.reply(from, {:error, :port_closed})
+        {:noreply, state}
+
+      _ ->
+        timer = Process.send_after(self(), {:command_timeout, id}, timeout)
+        {:noreply, put_in(state.pending_calls[id], {from, timer})}
+    end
+  end
+
+  defp cancel_deadline(timer)
+  defp cancel_deadline(nil), do: :ok
+  defp cancel_deadline(timer), do: Process.cancel_timer(timer)
 
   defp generate_id do
     8 |> :crypto.strong_rand_bytes() |> Base.encode16(case: :lower)

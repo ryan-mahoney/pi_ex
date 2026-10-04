@@ -4,6 +4,8 @@ defmodule PiEx.InstanceTest do
   # Helper: start an Instance with a fake port ref and writer function injected.
   # The Instance skips Port.open when :port is provided.
   # The writer sends {:port_write, data} to the test process for assertions.
+  alias PiEx.Command.ClearQueue
+  alias PiEx.Command.GetEntries
   alias PiEx.Event.AgentStart
   alias PiEx.Event.UIRequest
 
@@ -139,6 +141,125 @@ defmodule PiEx.InstanceTest do
       decoded = JSON.decode!(String.trim_trailing(data, "\n"))
       assert decoded["type"] == "prompt"
       assert decoded["message"] == "hello"
+      GenServer.stop(ctx.pid, :normal)
+    end
+  end
+
+  describe "command/3" do
+    test "writes the generated id and does not return while only a different id has arrived" do
+      ctx = start_instance()
+
+      task = Task.async(fn -> PiEx.command(ctx.pid, %GetEntries{since: "abc"}, 5_000) end)
+      assert_receive {:port_write, data}
+
+      decoded = JSON.decode!(String.trim_trailing(data, "\n"))
+      assert decoded["type"] == "get_entries"
+      assert decoded["since"] == "abc"
+      id = decoded["id"]
+
+      assert is_binary(id) and id != ""
+
+      send_line(ctx, ~s|{"type":"response","command":"get_entries","success":true,"id":"other","data":{}}|)
+      assert_receive {:pi_event, _, %PiEx.Response{id: "other"}}
+
+      assert nil == Task.yield(task, 100)
+
+      send_line(
+        ctx,
+        ~s|{"type":"response","command":"get_entries","success":true,"id":"#{id}","data":{"leafId":"abc"}}|
+      )
+
+      assert {:ok, %PiEx.Response{id: ^id, command: "get_entries", success: true}} = Task.await(task)
+      GenServer.stop(ctx.pid, :normal)
+    end
+
+    test "a success: false response with the matching id returns the error response" do
+      ctx = start_instance()
+
+      task = Task.async(fn -> PiEx.command(ctx.pid, %ClearQueue{}, 5_000) end)
+      assert_receive {:port_write, data}
+      id = JSON.decode!(String.trim_trailing(data, "\n"))["id"]
+
+      send_line(
+        ctx,
+        ~s|{"type":"response","command":"clear_queue","success":false,"id":"#{id}","error":"no session"}|
+      )
+
+      assert {:error, %PiEx.Response{success: false, error: "no session"}} = Task.await(task)
+      GenServer.stop(ctx.pid, :normal)
+    end
+
+    test "returns {:error, :timeout} at the deadline, clears the entry, and the late response reaches the owner" do
+      ctx = start_instance()
+
+      task = Task.async(fn -> PiEx.command(ctx.pid, %GetEntries{}, 100) end)
+      assert_receive {:port_write, data}
+      id = JSON.decode!(String.trim_trailing(data, "\n"))["id"]
+
+      assert {:error, :timeout} = Task.await(task)
+
+      state = :sys.get_state(ctx.pid)
+      assert state.pending_calls == %{}
+
+      send_line(
+        ctx,
+        ~s|{"type":"response","command":"get_entries","success":true,"id":"#{id}","data":{}}|
+      )
+
+      assert_receive {:pi_event, _, %PiEx.Response{id: ^id}}
+      assert Process.alive?(ctx.pid)
+      GenServer.stop(ctx.pid, :normal)
+    end
+
+    test "a response before the deadline cancels it: no stray timeout reply reaches the caller" do
+      test_pid = self()
+
+      helper =
+        spawn(fn ->
+          receive do
+            {:go, instance, port} ->
+              receive do
+                {:written, data} ->
+                  id = JSON.decode!(String.trim_trailing(data, "\n"))["id"]
+                  Process.sleep(20)
+
+                  line =
+                    ~s|{"type":"response","command":"get_entries","success":true,"id":"#{id}","data":{}}|
+
+                  send(instance, {port, {:data, {:eol, line}}})
+                  send(test_pid, :injected)
+              end
+          end
+        end)
+
+      ctx = start_instance(writer: fn _port, data -> send(helper, {:written, data}) end)
+      send(helper, {:go, ctx.pid, ctx.port})
+
+      assert {:ok, %PiEx.Response{}} = PiEx.command(ctx.pid, %GetEntries{}, 100)
+      assert_receive :injected
+
+      refute_receive _, 250
+      GenServer.stop(ctx.pid, :normal)
+    end
+
+    test "Pi exiting while a call is pending returns {:error, {:pi_exited, code}}" do
+      ctx = start_instance()
+
+      task = Task.async(fn -> PiEx.command(ctx.pid, %GetEntries{}, 5_000) end)
+      assert_receive {:port_write, _}
+
+      send(ctx.pid, {ctx.port, {:exit_status, 3}})
+
+      assert {:error, {:pi_exited, 3}} = Task.await(task)
+    end
+
+    test "a writer that raises ArgumentError makes the call return {:error, :port_closed} with no pending entry" do
+      ctx = start_instance(writer: fn _port, _data -> raise ArgumentError, "closed port" end)
+
+      assert {:error, :port_closed} = PiEx.command(ctx.pid, %GetEntries{}, 5_000)
+
+      state = :sys.get_state(ctx.pid)
+      assert state.pending_calls == %{}
       GenServer.stop(ctx.pid, :normal)
     end
   end

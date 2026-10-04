@@ -32,6 +32,20 @@ defmodule PiEx do
   @spec follow_up(GenServer.server(), String.t(), keyword()) :: :ok
   defdelegate follow_up(server, message, opts \\ []), to: PiEx.Instance
 
+  @doc """
+  Send any command struct and wait for the response carrying the generated ID.
+
+  The instance owns the deadline: on expiry it removes the pending entry and
+  returns `{:error, :timeout}`. A response arriving after that timeout is
+  delivered to the owner as `{:pi_event, id, %PiEx.Response{}}`. Returns
+  `{:error, {:pi_exited, code}}` when Pi exits while the call is pending and
+  `{:error, :port_closed}` when the write fails on a closed port.
+  """
+  @spec command(GenServer.server(), struct(), pos_integer()) ::
+          {:ok, PiEx.Response.t()}
+          | {:error, PiEx.Response.t() | :timeout | {:pi_exited, integer()} | :port_closed}
+  defdelegate command(server, command, timeout), to: PiEx.Instance
+
   @doc "Abort the current streaming response."
   @spec abort(GenServer.server()) :: :ok
   defdelegate abort(server), to: PiEx.Instance

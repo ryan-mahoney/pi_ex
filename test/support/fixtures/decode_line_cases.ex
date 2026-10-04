@@ -18,21 +18,27 @@ defmodule PiEx.TestFixtures.DecodeLineCases do
         line: ~s|{"type":"response","command":"get_state","success":true,"id":"req-1","data":{"isStreaming":false}}|,
         expected:
           {:response, "req-1",
-           %Response{command: "get_state", success: true, error: nil, data: %{"isStreaming" => false}}}
+           %Response{
+             id: "req-1",
+             command: "get_state",
+             success: true,
+             error: nil,
+             data: %{"isStreaming" => false}
+           }}
       },
       %{
         name: "response failure with error",
         line: ~s|{"type":"response","command":"prompt","success":false,"id":"req-2","error":"already streaming"}|,
         expected:
           {:response, "req-2",
-           %Response{command: "prompt", success: false, error: "already streaming", data: nil}}
+           %Response{id: "req-2", command: "prompt", success: false, error: "already streaming", data: nil}}
       },
       %{
         name: "response missing optional fields defaults to nil",
         line: ~s|{"type":"response","command":"get_messages","success":true,"id":"req-3"}|,
         expected:
           {:response, "req-3",
-           %Response{command: "get_messages", success: true, error: nil, data: nil}}
+           %Response{id: "req-3", command: "get_messages", success: true, error: nil, data: nil}}
       },
       %{
         name: "agent start event",
